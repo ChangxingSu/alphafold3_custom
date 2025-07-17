@@ -24,6 +24,7 @@ The unpaired MSA:
 """
 
 from typing import Mapping, MutableMapping, Sequence
+import re
 from alphafold3.model import data_constants
 import numpy as np
 
@@ -109,12 +110,24 @@ def create_paired_features(
   min_hits_per_species = {}
 
   for chain in chains:
-    species_ids = chain['msa_species_identifiers_all_seq']
+    # MODIFIED: Parse species_id from description field 'TAX={taxid}'.
+    descriptions = chain['msa_descriptions_all_seq']
+    species_ids = []
+    for desc in descriptions:
+      desc_str = desc.decode('utf-8')
+      match = re.search(r'TAX=(\d+)', desc_str)
+      if match:
+        species_ids.append(int(match.group(1)))
+      else:
+        # Default to -1 if no taxid is found, to maintain array shape
+        # and indicate an unknown species.
+        species_ids.append(-1)
+    species_ids = np.array(species_ids, dtype=np.int32)
 
     # The query gets an empty species_id, so no pairing happens for this row.
     if (
         species_ids.size == 0
-        or (species_ids.size == 1 and not species_ids[0])
+        or (species_ids.size == 1 and species_ids[0] == -1)
         or chain['chain_id'] not in nonempty_chain_ids
     ):
       chains_species_to_rows.append({})
