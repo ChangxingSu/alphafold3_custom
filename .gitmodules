@@ -13,3 +13,9 @@
 [submodule "include/dssp"]
 	path = include/dssp
 	url = https://github.com/PDB-REDO/dssp.git
+[submodule "include/boost-rx"]
+	path = include/boost-rx
+	url = https://github.com/boostorg/regex.git
+[submodule "include/eigen"]
+	path = include/eigen
+	url = https://gitlab.com/libeigen/eigen.git
