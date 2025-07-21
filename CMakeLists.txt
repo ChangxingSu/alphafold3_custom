@@ -24,27 +24,27 @@ set(ABSL_PROPAGATE_CXX_STD ON)
 unset(CMAKE_CXX_SCANDEP_SOURCE)
 
 # Use local submodules from the 'include' directory and configure them
-# for a clean offline build.
+# for a clean offline build by disabling all test suites and external fetching.
 
-# Disable testing for abseil-cpp to prevent it from trying to download gtest.
+# For abseil-cpp, disable its testing to prevent gtest download.
 set(ABSL_BUILD_TESTING OFF CACHE BOOL "Disable Abseil testing" FORCE)
-set(ABSL_BUILD_TEST_HELPERS OFF CACHE BOOL "Disable Abseil test helpers" FORCE)
 add_subdirectory(include/abseil-cpp)
 
-# Disable testing for pybind11.
+# For pybind11, disable its tests.
 set(PYBIND11_TEST OFF CACHE BOOL "Disable pybind11 testing" FORCE)
 add_subdirectory(include/pybind11)
 
-# For pybind11_abseil, tell it that the main projects already provide the dependencies.
-set(PYBIND11_ABSEIL_USE_EXTERNAL_DEPS ON CACHE BOOL "Use external dependencies" FORCE)
+# For pybind11_abseil, it has no tests to disable, but we link it.
 add_subdirectory(include/pybind11_abseil)
 
-# For cifpp, disable its own dependency fetching logic.
+# For cifpp, disable its tests and its own data download mechanism.
+set(BUILD_TESTING OFF CACHE BOOL "Disable libcifpp testing" FORCE)
 set(CIFPP_DOWNLOAD_CCD OFF CACHE BOOL "Disable cifpp CCD download" FORCE)
 add_subdirectory(include/libcifpp)
 
-# For dssp, disable its dependency fetching logic.
+# For dssp, disable its tests and its own dependency fetching.
 set(DSSP_FETCH_SUPPORT_LIBS OFF CACHE BOOL "Disable dssp support lib fetching" FORCE)
+set(DSSP_BUILD_TESTS OFF CACHE BOOL "Disable dssp testing" FORCE)
 add_subdirectory(include/dssp)
 
 find_package(
