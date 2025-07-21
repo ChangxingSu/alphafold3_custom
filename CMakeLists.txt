@@ -23,38 +23,12 @@ set(ABSL_PROPAGATE_CXX_STD ON)
 # Remove support for scan deps, which is only useful when using C++ modules.
 unset(CMAKE_CXX_SCANDEP_SOURCE)
 
-FetchContent_Declare(
-  abseil-cpp
-  GIT_REPOSITORY https://github.com/abseil/abseil-cpp
-  GIT_TAG d7aaad83b488fd62bd51c81ecf16cd938532cc0a # 20240116.2
-  EXCLUDE_FROM_ALL)
-
-FetchContent_Declare(
-  pybind11
-  GIT_REPOSITORY https://github.com/pybind/pybind11
-  GIT_TAG 2e0815278cb899b20870a67ca8205996ef47e70f # v2.12.0
-  EXCLUDE_FROM_ALL)
-
-FetchContent_Declare(
-  pybind11_abseil
-  GIT_REPOSITORY https://github.com/pybind/pybind11_abseil
-  GIT_TAG bddf30141f9fec8e577f515313caec45f559d319 # HEAD @ 2024-08-07
-  EXCLUDE_FROM_ALL)
-
-FetchContent_Declare(
-  cifpp
-  GIT_REPOSITORY https://github.com/pdb-redo/libcifpp
-  GIT_TAG ac98531a2fc8daf21131faa0c3d73766efa46180 # v7.0.3
-  # Don't `EXCLUDE_FROM_ALL` as necessary for build_data.
-)
-
-FetchContent_Declare(
-  dssp
-  GIT_REPOSITORY https://github.com/PDB-REDO/dssp
-  GIT_TAG 57560472b4260dc41f457706bc45fc6ef0bc0f10 # v4.4.7
-  EXCLUDE_FROM_ALL)
-
-FetchContent_MakeAvailable(pybind11 abseil-cpp pybind11_abseil cifpp dssp)
+# Use local submodules from the 'include' directory.
+add_subdirectory(include/abseil-cpp)
+add_subdirectory(include/pybind11)
+add_subdirectory(include/pybind11_abseil)
+add_subdirectory(include/libcifpp)
+add_subdirectory(include/dssp)
 
 find_package(
   Python3
