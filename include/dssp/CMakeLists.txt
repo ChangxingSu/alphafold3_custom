@@ -96,38 +96,7 @@ endif()
 set(CMAKE_THREAD_PREFER_PTHREAD)
 set(THREADS_PREFER_PTHREAD_FLAG)
 find_package(Threads)
-find_package(libmcfp QUIET)
-
-if(NOT libmcfp_FOUND)
-	include(FetchContent)
-
-	if(CMAKE_VERSION GREATER_EQUAL 3.28)
-		set(EXLC "EXCLUDE_FROM_ALL")
-	endif()
-
-	FetchContent_Declare(
-		libmcfp
-		${EXLC}
-		GIT_REPOSITORY https://github.com/mhekkel/libmcfp
-		GIT_TAG v1.3.1)
-
-	FetchContent_MakeAvailable(libmcfp)
-endif()
-
-find_package(cifpp 7 QUIET)
-
-if(NOT cifpp_FOUND)
-	set(CIFPP_DOWNLOAD_CCD OFF)
-
-	FetchContent_Declare(
-		cifpp
-		${EXLC}
-		GIT_REPOSITORY https://github.com/pdb-redo/libcifpp.git
-		GIT_TAG v7.0.3
-	)
-
-	FetchContent_MakeAvailable(cifpp)
-endif()
+find_package(cifpp 7 REQUIRED)
 
 add_subdirectory(libdssp)
 

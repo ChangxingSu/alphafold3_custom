@@ -172,18 +172,7 @@ if(GXX_LIBSTDCPP)
 			"You are probably trying to compile using the g++ standard library which contains a crashing std::regex implementation. Will use boost::regex instead"
 		)
 
-		find_package(Boost 1.80 QUIET COMPONENTS regex)
-
-		if(NOT Boost_FOUND)
-			set(BOOST_REGEX_STANDALONE ON)
-
-			FetchContent_Declare(
-				boost-rx
-				GIT_REPOSITORY https://github.com/boostorg/regex
-				GIT_TAG boost-1.83.0)
-
-			FetchContent_MakeAvailable(boost-rx)
-		endif()
+		find_package(Boost 1.80 REQUIRED COMPONENTS regex)
 
 		set(BOOST_REGEX ON)
 	endif()
@@ -226,26 +215,8 @@ find_package(ZLIB REQUIRED)
 # Using Eigen3 is a bit of a thing. We don't want to build it completely since
 # we only need a couple of header files. Nothing special. But often, eigen3 is
 # already installed and then we prefer that.
-find_package(Eigen3 3.4 QUIET)
-
-if(Eigen3_FOUND AND TARGET Eigen3::Eigen)
-	get_target_property(EIGEN_INCLUDE_DIR Eigen3::Eigen
-		INTERFACE_INCLUDE_DIRECTORIES)
-else()
-	# Create a private copy of eigen3 and populate it only, no need to build
-	FetchContent_Declare(
-		my-eigen3
-		GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-		GIT_TAG 3.4.0)
-
-	FetchContent_GetProperties(my-eigen3)
-
-	if(NOT my-eigen3_POPULATED)
-		FetchContent_Populate(my-eigen3)
-	endif()
-
-	set(EIGEN_INCLUDE_DIR ${my-eigen3_SOURCE_DIR})
-endif()
+find_package(Eigen3 3.4 REQUIRED)
+get_target_property(EIGEN_INCLUDE_DIR Eigen3::Eigen INTERFACE_INCLUDE_DIRECTORIES)
 
 include(FindFilesystem)
 list(APPEND CIFPP_REQUIRED_LIBRARIES ${STDCPPFS_LIBRARY})
@@ -376,7 +347,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
 	target_link_options(cifpp PRIVATE -undefined dynamic_lookup)
 endif(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
 
-if(CIFPP_DOWNLOAD_CCD)
+if(FALSE)
 	# download the components.cif file from CCD
 	set(COMPONENTS_CIF ${CMAKE_CURRENT_SOURCE_DIR}/rsrc/components.cif)
 
