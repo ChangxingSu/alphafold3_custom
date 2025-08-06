@@ -76,7 +76,7 @@ class NPZToAF3Processor:
             with open(self.tsv_file, 'r') as f:
                 names = [line.strip().split('\t')[0] for line in f if line.strip()]
             logger.info(f"Loaded {len(names)} protein names from TSV")
-            logger.info(f"{"ig7l" in names}")
+            logger.info(f"'ig7l' in names: {'ig7l' in names}")
             return names
         except Exception as e:
             logger.warning(f"Failed to read TSV file: {e}")
@@ -105,14 +105,18 @@ class NPZToAF3Processor:
         return npz_files
     
     def _npz_to_a3m_string(self, msa: MSA) -> str:
-        """Convert MSA object to A3M format string"""
+        """
+        Convert MSA object to A3M format string
+
+        Reverse handling with https://github.com/jwohlwend/boltz/blob/main/src/boltz/data/parse/a3m.py#L11
+        """
         lines = []
         
         for seq_idx, taxonomy_id, res_start, res_end, del_start, del_end in msa.sequences:
             # Build header
             header = f">seq_{seq_idx}"
             if taxonomy_id != -1:
-                header += f" OX={taxonomy_id}"
+                header += f" TAX={taxonomy_id}"
             lines.append(header)
             
             # Reconstruct sequence (including deletions)
@@ -123,15 +127,16 @@ class NPZToAF3Processor:
             deletion_map = {d["res_idx"]: d["deletion"] for d in current_deletions}
             
             for i, res_data in enumerate(current_residues):
+                # Add deleted residues (represented by lowercase letters)
+                # since alphafold3 only focus the num of deletions, not the exact sequence
+                if i in deletion_map:
+                    sequence_str.append("a" * deletion_map[i])
+
                 res_type_token = res_data["res_type"]
                 amino_acid_letter = const.prot_token_to_letter.get(
                     const.tokens[res_type_token], "X"
                 )
                 sequence_str.append(amino_acid_letter)
-                
-                # Add deleted residues (represented by -)
-                if i in deletion_map:
-                    sequence_str.append("-" * deletion_map[i])
             
             lines.append("".join(sequence_str))
         
