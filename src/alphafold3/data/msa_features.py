@@ -179,24 +179,37 @@ _UNIPROT_ENTRY_NAME_REGEX = re.compile(
 
 
 def extract_species_ids(msa_descriptions: Sequence[str]) -> Sequence[str]:
-  """Extracts species ID from MSA UniProtKB sequence identifiers.
+  """Extracts species ID from MSA sequence identifiers.
+
+  Supports both UniProtKB format and TAX=number format.
 
   Args:
     msa_descriptions: The descriptions (the FASTA/A3M comment line) for each of
       the sequences.
 
   Returns:
-    Extracted UniProtKB species IDs if there is a regex match for each
+    Extracted species IDs if there is a regex match for each
     description line, blank if the regex doesn't match.
   """
   species_ids = []
   for msa_description in msa_descriptions:
     msa_description = msa_description.strip()
-    match = _UNIPROT_ENTRY_NAME_REGEX.match(msa_description)
-    if match:
-      species_ids.append(match.group('SpeciesId'))
+    
+    # First try to match TAX=number format
+    tax_match = re.search(r'TAX=(\d+)', msa_description)
+    if tax_match:
+      species_ids.append(tax_match.group(1))
     else:
       # Handle cases where the regex doesn't match
       # (e.g., append None or raise an error depending on your needs)
       species_ids.append('')
+    
+    # # If no TAX format, try UniProtKB format
+    # match = _UNIPROT_ENTRY_NAME_REGEX.match(msa_description)
+    # if match:
+    #   species_ids.append(match.group('SpeciesId'))
+    # else:
+    #   # Handle cases where the regex doesn't match
+    #   # (e.g., append None or raise an error depending on your needs)
+    #   species_ids.append('')
   return species_ids
