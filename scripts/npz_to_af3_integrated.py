@@ -76,6 +76,7 @@ class NPZToAF3Processor:
             with open(self.tsv_file, 'r') as f:
                 names = [line.strip().split('\t')[0] for line in f if line.strip()]
             logger.info(f"Loaded {len(names)} protein names from TSV")
+            logger.info(f"{"ig7l" in names}")
             return names
         except Exception as e:
             logger.warning(f"Failed to read TSV file: {e}")
@@ -150,7 +151,14 @@ class NPZToAF3Processor:
         paired_msa_entries = []
         unpaired_msa_entries = []
         
-        i = 0
+        # Add query sequence to unpaired MSA (first sequence)
+        query_header = ">query"
+        query_entry = query_header + '\n' + query_sequence + '\n'
+        # Add query sequence to paired MSA and unpaired MSA
+        unpaired_msa_entries.append(query_entry)
+        paired_msa_entries.append(query_entry)
+
+        i = 2  # Start from the second sequence (skip query sequence)
         while i < len(lines):
             if lines[i].startswith('>'):
                 header = lines[i]
