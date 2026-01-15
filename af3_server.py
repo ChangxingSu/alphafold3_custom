@@ -24,7 +24,7 @@ import os
 import pathlib
 import time
 import uuid
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 from absl import app as absl_app
 from absl import flags
@@ -123,6 +123,21 @@ class PredictRequest(BaseModel):
       False, description="If true, also include mmCIF text in the response."
   )
 
+class PredictFromJsonPathRequest(BaseModel):
+  json_path: str = Field(
+      ..., description="Path to an AlphaFold3 input JSON readable by the server."
+  )
+  seed: int | None = Field(
+      None,
+      description=(
+          "Optional override seed. If set, replaces modelSeeds from the JSON for inference."
+      ),
+  )
+  reward: RewardName = Field("iptm", description="Which scalar to return as reward.")
+  return_mmcif_text: bool = Field(
+      False, description="If true, also include mmCIF text in the response."
+  )
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class _ServerConfig:
@@ -141,7 +156,8 @@ class _ServerConfig:
 
 # Global server state (initialized in FastAPI startup).
 app = FastAPI()
-_queue: asyncio.Queue[tuple[PredictRequest, asyncio.Future]] = asyncio.Queue()
+_QueueJob = Union[PredictRequest, PredictFromJsonPathRequest]
+_queue: asyncio.Queue[tuple[_QueueJob, asyncio.Future]] = asyncio.Queue()
 _model_runners: list[ra.ModelRunner] = []
 _server_cfg: Optional[_ServerConfig] = None
 
@@ -152,20 +168,34 @@ async def _worker_loop(worker_idx: int, model_runner: ra.ModelRunner):
     req, fut = await _queue.get()
     try:
       assert _server_cfg is not None
-      out = _predict_one(req, _server_cfg, model_runner)
+      if isinstance(req, PredictRequest):
+        fold_in = _fold_input_from_chains(req)
+        out = _predict_from_fold_input(
+            fold_in=fold_in,
+            reward=req.reward,
+            return_mmcif_text=req.return_mmcif_text,
+            cfg=_server_cfg,
+            model_runner=model_runner,
+        )
+      elif isinstance(req, PredictFromJsonPathRequest):
+        fold_in = _load_fold_input_from_json_path(req.json_path, seed=req.seed)
+        out = _predict_from_fold_input(
+            fold_in=fold_in,
+            reward=req.reward,
+            return_mmcif_text=req.return_mmcif_text,
+            cfg=_server_cfg,
+            model_runner=model_runner,
+        )
+      else:
+        raise TypeError(f"Unknown request type in queue: {type(req).__name__}")
       fut.set_result(out)
     except Exception as e:  # pylint: disable=broad-exception-caught
       fut.set_exception(e)
     finally:
       _queue.task_done()
 
-
-def _predict_one(
-    req: PredictRequest, cfg: _ServerConfig, model_runner: ra.ModelRunner
-) -> dict[str, Any]:
-  start = time.time()
-
-  # Build AF3 folding_input.Input with empty MSA + no templates.
+def _fold_input_from_chains(req: PredictRequest) -> folding_input.Input:
+  """Builds a folding_input.Input from chain sequences (empty MSA/no templates)."""
   chains: list[folding_input.ProteinChain] = []
   for c in req.chains:
     chains.append(
@@ -178,8 +208,36 @@ def _predict_one(
             templates=[],
         )
     )
+  return folding_input.Input(name=req.name, chains=chains, rng_seeds=[req.seed])
 
-  fold_in = folding_input.Input(name=req.name, chains=chains, rng_seeds=[req.seed])
+
+def _load_fold_input_from_json_path(
+    json_path: str, *, seed: int | None
+) -> folding_input.Input:
+  """Loads the first fold input from an AlphaFold3 JSON file path."""
+  p = pathlib.Path(json_path)
+  fold_inputs = list(folding_input.load_fold_inputs_from_path(p))
+  if not fold_inputs:
+    raise ValueError(f"No fold inputs found in JSON: {json_path}")
+  if len(fold_inputs) > 1:
+    # Keep it simple for now: first job only.
+    # TODO: add a batch endpoint or a request field to select job index.
+    pass
+  fold_in = fold_inputs[0]
+  if seed is not None:
+    fold_in = dataclasses.replace(fold_in, rng_seeds=[int(seed)])
+  return fold_in
+
+
+def _predict_from_fold_input(
+    *,
+    fold_in: folding_input.Input,
+    reward: RewardName,
+    return_mmcif_text: bool,
+    cfg: _ServerConfig,
+    model_runner: ra.ModelRunner,
+) -> dict[str, Any]:
+  start = time.time()
 
   ccd = chemical_components.cached_ccd(user_ccd=fold_in.user_ccd)
   featurised_examples = featurisation.featurise_input(
@@ -193,7 +251,7 @@ def _predict_one(
   )
   batch = featurised_examples[0]
 
-  rng_key = jax.random.PRNGKey(req.seed)
+  rng_key = jax.random.PRNGKey(int(fold_in.rng_seeds[0]))
   result = model_runner.run_inference(batch, rng_key)
   inference_results = model_runner.extract_inference_results(
       batch=batch, result=result, target_name=fold_in.name
@@ -212,7 +270,7 @@ def _predict_one(
   # Also write a small JSON sidecar with metrics (handy for RL logging/debugging).
   metrics = {
       "job_id": job_id,
-      "seed": int(req.seed),
+      "seed": int(fold_in.rng_seeds[0]),
       "ranking_score": float(best.metadata["ranking_score"]),
       "iptm": float(best.metadata["iptm"]),
       "ptm": float(best.metadata["ptm"]),
@@ -225,14 +283,14 @@ def _predict_one(
   }
   (cfg.output_dir / f"{job_id}.metrics.json").write_text(json.dumps(metrics, indent=2))
 
-  reward_val = float(best.metadata[req.reward])
+  reward_val = float(best.metadata[reward])
   resp: dict[str, Any] = {
       "job_id": job_id,
-      "reward_name": req.reward,
+      "reward_name": reward,
       "reward": reward_val,
       **metrics,
   }
-  if req.return_mmcif_text:
+  if return_mmcif_text:
     resp["mmcif"] = mmcif_text
   return resp
 
@@ -259,6 +317,15 @@ def health() -> dict[str, Any]:
 @app.post("/predict")
 async def predict(req: PredictRequest) -> dict[str, Any]:
   # Enqueue request, wait for worker result.
+  loop = asyncio.get_running_loop()
+  fut: asyncio.Future = loop.create_future()
+  await _queue.put((req, fut))
+  return await fut
+
+
+@app.post("/predict_from_json_path")
+async def predict_from_json_path(req: PredictFromJsonPathRequest) -> dict[str, Any]:
+  """Predict from an AlphaFold3 JSON file path (server can read the path)."""
   loop = asyncio.get_running_loop()
   fut: asyncio.Future = loop.create_future()
   await _queue.put((req, fut))

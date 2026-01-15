@@ -100,6 +100,23 @@ curl -X POST http://127.0.0.1:8000/predict \
   }'
 ```
 
+### Predict from a JSON file path (recommended for large MSA)
+
+If you precompute MSAs/templates and store them on disk (e.g. using
+`unpairedMsaPath` / `pairedMsaPath` in the AlphaFold3 JSON), you can ask the
+server to load the JSON directly:
+
+```
+curl -X POST http://127.0.0.1:8000/predict_from_json_path \
+  -H "Content-Type: application/json" \
+  -d '{
+    "json_path": "/path/on/server/to/input.json",
+    "seed": 0,
+    "reward": "iptm",
+    "return_mmcif_text": false
+  }'
+```
+
 The response includes:
 
 *   `iptm`, `ptm`, `ranking_score`, `plddt_mean`
