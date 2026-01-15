@@ -32,6 +32,7 @@ import string
 import textwrap
 import time
 import typing
+import traceback
 from typing import overload
 
 from absl import app
@@ -754,10 +755,28 @@ def main(_):
         ' set to true.'
     )
 
+  # Collect errors that may occur before output dir is created (e.g., loading inputs)
+  preload_error_entries: list[str] = []
+
   if _INPUT_DIR.value is not None:
-    fold_inputs = folding_input.load_fold_inputs_from_dir(
-        pathlib.Path(_INPUT_DIR.value)
-    )
+    try:
+      fold_inputs = folding_input.load_fold_inputs_from_dir(
+          pathlib.Path(_INPUT_DIR.value)
+      )
+    except Exception as e:
+      # Fall back to per-file loading so that a single bad JSON doesn't stop the batch
+      dir_path = pathlib.Path(_INPUT_DIR.value)
+      fold_inputs = []
+      for p in sorted(dir_path.iterdir()):
+        if p.is_file() and p.suffix.lower() == '.json':
+          try:
+            loaded = folding_input.load_fold_inputs_from_path(p)
+            fold_inputs.extend(loaded)
+          except Exception as ee:
+            ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            preload_error_entries.append(
+                f'[{ts}] Failed to load {p}: {ee}\n{traceback.format_exc()}'
+            )
   elif _JSON_PATH.value is not None:
     fold_inputs = folding_input.load_fold_inputs_from_path(
         pathlib.Path(_JSON_PATH.value)
@@ -773,6 +792,22 @@ def main(_):
   except OSError as e:
     print(f'Failed to create output directory {_OUTPUT_DIR.value}: {e}')
     raise
+
+  # Initialize error log
+  error_log_path = os.path.join(_OUTPUT_DIR.value, 'errors.log')
+  try:
+    with open(error_log_path, 'a') as elog:
+      session_header = (
+          f"\n===== AlphaFold3 run at "
+          f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =====\n"
+      )
+      elog.write(session_header)
+      if preload_error_entries:
+        elog.write('# Errors during input loading (pre-run)\n')
+        for entry in preload_error_entries:
+          elog.write(entry + '\n')
+  except Exception as e:
+    print(f'Warning: failed to initialize error log at {error_log_path}: {e}')
 
   if _RUN_INFERENCE.value:
     # Fail early on incompatible devices, but only if we're running inference.
@@ -870,24 +905,48 @@ def main(_):
     model_runner = None
 
   num_fold_inputs = 0
+  num_success = 0
+  num_failed = 0
   for fold_input in fold_inputs:
-    if _NUM_SEEDS.value is not None:
-      print(f'Expanding fold job {fold_input.name} to {_NUM_SEEDS.value} seeds')
-      fold_input = fold_input.with_multiple_seeds(_NUM_SEEDS.value)
-    process_fold_input(
-        fold_input=fold_input,
-        data_pipeline_config=data_pipeline_config,
-        model_runner=model_runner,
-        output_dir=os.path.join(_OUTPUT_DIR.value, fold_input.sanitised_name()),
-        buckets=tuple(int(bucket) for bucket in _BUCKETS.value),
-        ref_max_modified_date=max_template_date,
-        conformer_max_iterations=_CONFORMER_MAX_ITERATIONS.value,
-        resolve_msa_overlaps=_RESOLVE_MSA_OVERLAPS.value,
-        force_output_dir=_FORCE_OUTPUT_DIR.value,
-    )
-    num_fold_inputs += 1
+    try:
+      if _NUM_SEEDS.value is not None:
+        print(f'Expanding fold job {fold_input.name} to {_NUM_SEEDS.value} seeds')
+        fold_input = fold_input.with_multiple_seeds(_NUM_SEEDS.value)
+      process_fold_input(
+          fold_input=fold_input,
+          data_pipeline_config=data_pipeline_config,
+          model_runner=model_runner,
+          output_dir=os.path.join(_OUTPUT_DIR.value, fold_input.sanitised_name()),
+          buckets=tuple(int(bucket) for bucket in _BUCKETS.value),
+          ref_max_modified_date=max_template_date,
+          conformer_max_iterations=_CONFORMER_MAX_ITERATIONS.value,
+          resolve_msa_overlaps=_RESOLVE_MSA_OVERLAPS.value,
+          force_output_dir=_FORCE_OUTPUT_DIR.value,
+      )
+      num_success += 1
+    except Exception as e:
+      num_failed += 1
+      ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+      err_msg = (
+          f'[{ts}] Failed to run fold job {getattr(fold_input, "name", "<unknown>")}:'
+          f' {e}\n{traceback.format_exc()}'
+      )
+      print(err_msg)
+      try:
+        with open(error_log_path, 'a') as elog:
+          elog.write(err_msg + '\n')
+      except Exception as log_e:
+        print(f'Warning: failed to write to error log: {log_e}')
+      # continue to next input
+    finally:
+      num_fold_inputs += 1
 
-  print(f'Done running {num_fold_inputs} fold jobs.')
+  summary = (
+      f'Done running {num_fold_inputs} fold jobs. '
+      f'Succeeded: {num_success}, Failed: {num_failed}. '
+      f'Error log: {error_log_path}'
+  )
+  print(summary)
 
 
 if __name__ == '__main__':
