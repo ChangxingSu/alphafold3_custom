@@ -54,6 +54,28 @@ python af3_server.py \
   --host 0.0.0.0 --port 8000 --workers 1
 ```
 
+#### Multi-GPU (single process, shared queue)
+
+To serve with multiple GPUs while keeping a single shared queue, pass
+`--server_num_gpus` (number of GPUs). The server uses the first N *visible* GPUs
+and starts one GPU worker per device inside the same process. Use
+`CUDA_VISIBLE_DEVICES` to control which physical GPUs are visible.
+
+```
+CUDA_VISIBLE_DEVICES=0,1,2,3 python af3_server.py \
+  --model_dir=/root/models \
+  --output_dir=/root/af_server_output \
+  --num_recycles=3 \
+  --num_diffusion_samples=1 \
+  --flash_attention_implementation=triton \
+  --server_num_gpus=4 \
+  --jax_compilation_cache_dir=/root/jax_cache \
+  --host 0.0.0.0 --port 8000 --workers 1
+```
+
+Note: each GPU worker loads its own copy of model parameters (GPU memory usage
+scales with the number of GPUs).
+
 ### Make a request (antibody–antigen complex, empty MSA/no templates)
 
 Request format is a list of chains (`H/L/A/...`), plus an RNG seed:

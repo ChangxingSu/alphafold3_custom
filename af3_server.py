@@ -54,6 +54,13 @@ _WORKERS = flags.DEFINE_integer(
     "Number of uvicorn worker processes. Keep 1 to avoid multiple model loads on GPU.",
     lower_bound=1,
 )
+_SERVER_NUM_GPUS = flags.DEFINE_integer(
+    "server_num_gpus",
+    None,
+    "Number of GPUs to use for multi-GPU serving (single process, shared queue). "
+    "If set, the server uses the first N visible GPUs (controlled via CUDA_VISIBLE_DEVICES).",
+    lower_bound=1,
+)
 
 def _choose_device(gpu_device: int | None) -> jax.Device:
   gpus = jax.local_devices(backend="gpu")
@@ -129,23 +136,23 @@ class _ServerConfig:
   num_diffusion_samples: int
   num_recycles: int
   gpu_device: int
+  server_num_gpus: int | None
 
 
 # Global server state (initialized in FastAPI startup).
 app = FastAPI()
 _queue: asyncio.Queue[tuple[PredictRequest, asyncio.Future]] = asyncio.Queue()
-_model_runner: Optional[ra.ModelRunner] = None
+_model_runners: list[ra.ModelRunner] = []
 _server_cfg: Optional[_ServerConfig] = None
 
 
-async def _worker_loop():
-  # Single worker loop: processes requests sequentially (GPU friendly).
+async def _worker_loop(worker_idx: int, model_runner: ra.ModelRunner):
+  # Worker loop: processes requests sequentially on its bound device.
   while True:
     req, fut = await _queue.get()
     try:
-      assert _model_runner is not None
       assert _server_cfg is not None
-      out = _predict_one(req, _server_cfg, _model_runner)
+      out = _predict_one(req, _server_cfg, model_runner)
       fut.set_result(out)
     except Exception as e:  # pylint: disable=broad-exception-caught
       fut.set_exception(e)
@@ -235,7 +242,8 @@ def health() -> dict[str, Any]:
   return {
       "status": "ok",
       "queue_size": _queue.qsize(),
-      "model_loaded": _model_runner is not None,
+      "model_loaded": bool(_model_runners),
+      "num_gpu_workers": len(_model_runners),
       "config": {
           "num_recycles": getattr(_server_cfg, "num_recycles", None),
           "num_diffusion_samples": getattr(_server_cfg, "num_diffusion_samples", None),
@@ -243,6 +251,7 @@ def health() -> dict[str, Any]:
               _server_cfg, "flash_attention_implementation", None
           ),
           "output_dir": str(getattr(_server_cfg, "output_dir", "")) if _server_cfg else None,
+          "server_num_gpus": getattr(_server_cfg, "server_num_gpus", None),
       },
   }
 
@@ -267,7 +276,7 @@ async def predict(req: PredictRequest) -> dict[str, Any]:
 
 @app.on_event("startup")
 async def _startup():
-  global _model_runner
+  global _model_runners
   global _server_cfg
 
   # `absl_app.run(main)` sets `_server_cfg` before uvicorn starts the app.
@@ -278,25 +287,39 @@ async def _startup():
     )
 
   cfg = _server_cfg
-  device = _choose_device(cfg.gpu_device)
-  _validate_device_and_attention_impl(device, cfg.flash_attention_implementation)
-  _model_runner = ra.ModelRunner(
-      config=ra.make_model_config(
-          flash_attention_implementation=cfg.flash_attention_implementation,  # type: ignore[arg-type]
-          num_diffusion_samples=cfg.num_diffusion_samples,
-          num_recycles=cfg.num_recycles,
-          return_embeddings=ra._SAVE_EMBEDDINGS.value,
-          return_distogram=ra._SAVE_DISTOGRAM.value,
-      ),
-      device=device,
-      model_dir=cfg.model_dir,
-  )
+  gpu_devices = jax.local_devices(backend="gpu")
 
-  # Load model parameters now (avoid first-request hiccup).
-  _ = _model_runner.model_params
+  if cfg.server_num_gpus is not None:
+    if not gpu_devices:
+      raise ValueError("--server_num_gpus was set but no GPU devices were found.")
+    if cfg.server_num_gpus > len(gpu_devices):
+      raise ValueError(
+          f"--server_num_gpus={cfg.server_num_gpus} but only {len(gpu_devices)} GPU(s) are visible. "
+          "Use CUDA_VISIBLE_DEVICES to control which GPUs are visible."
+      )
+    selected_devices = list(gpu_devices[: cfg.server_num_gpus])
+  else:
+    # Backward-compatible: single-device serving using --gpu_device.
+    selected_devices = [_choose_device(cfg.gpu_device)]
 
-  # Start single worker.
-  asyncio.create_task(_worker_loop())
+  _model_runners = []
+  for worker_idx, device in enumerate(selected_devices):
+    _validate_device_and_attention_impl(device, cfg.flash_attention_implementation)
+    runner = ra.ModelRunner(
+        config=ra.make_model_config(
+            flash_attention_implementation=cfg.flash_attention_implementation,  # type: ignore[arg-type]
+            num_diffusion_samples=cfg.num_diffusion_samples,
+            num_recycles=cfg.num_recycles,
+            return_embeddings=ra._SAVE_EMBEDDINGS.value,
+            return_distogram=ra._SAVE_DISTOGRAM.value,
+        ),
+        device=device,
+        model_dir=cfg.model_dir,
+    )
+    # Load model parameters now (avoid first-request hiccup).
+    _ = runner.model_params
+    _model_runners.append(runner)
+    asyncio.create_task(_worker_loop(worker_idx, runner))
 
 def _build_server_config_from_flags() -> _ServerConfig:
   # Buckets are stored as strings in the flag (same as run_alphafold.py).
@@ -328,6 +351,7 @@ def _build_server_config_from_flags() -> _ServerConfig:
       num_diffusion_samples=ra._NUM_DIFFUSION_SAMPLES.value,
       num_recycles=ra._NUM_RECYCLES.value,
       gpu_device=ra._GPU_DEVICE.value,
+      server_num_gpus=_SERVER_NUM_GPUS.value,
   )
 
 
